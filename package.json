@@ -11,6 +11,7 @@
   "dependencies": {
     "@solana/actions": "^1.6.4",
     "@solana/web3.js": "^1.95.3",
+    "@sqds/multisig": "2.1.1",
     "next": "14.2.7",
     "react": "^18",
     "react-dom": "^18"
