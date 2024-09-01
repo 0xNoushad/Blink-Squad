@@ -10,7 +10,6 @@ import {
     Connection,
     PublicKey,
     Transaction,
-    clusterApiUrl,
 } from "@solana/web3.js";
 // @ts-ignore
 import * as multisig from "@sqds/multisig";
@@ -38,20 +37,15 @@ export async function GET(request: Request) {
         title: "Claim Rent from Squads Multisig",
         description: "Claim rent from executed or cancelled transactions in your Squads multisig.",
         label: "Claim Rent",
-        links: {        
+        links: {
             actions: [
                 {
                     label: "Claim Rent",
-                    href: `${url.origin}${url.pathname}?action=claim&multisigAddress={multisigAddress}&transactionAccount={transactionAccount}`,
+                    href: `${url.origin}${url.pathname}?action=claim&multisigAddress={multisigAddress}`,
                     parameters: [
                         {
                             name: "multisigAddress",
                             label: "Multisig Address",
-                            required: true,
-                        },
-                        {
-                            name: "transactionAccount",
-                            label: "Transaction Account",
                             required: true,
                         },
                     ],
@@ -74,14 +68,12 @@ export async function POST(request: Request) {
     const url = new URL(request.url);
     const action = url.searchParams.get("action");
     const multisigAddress = url.searchParams.get("multisigAddress");
-    const transactionAccount = url.searchParams.get("transactionAccount");
 
     console.log("POST request received. Action:", action);
     console.log("Multisig Address:", multisigAddress);
-    console.log("Transaction Account:", transactionAccount);
 
-    if (!action || action !== "claim" || !multisigAddress || !transactionAccount) {
-        console.error("Invalid parameters. Action:", action, "Multisig Address:", multisigAddress, "Transaction Account:", transactionAccount);
+    if (!action || action !== "claim" || !multisigAddress) {
+        console.error("Invalid parameters. Action:", action, "Multisig Address:", multisigAddress);
         return Response.json({ error: "Invalid parameters" }, {
             status: 400,
             headers: ACTIONS_CORS_HEADERS,
@@ -102,16 +94,7 @@ export async function POST(request: Request) {
         });
     }
 
-    // Ensure the user's account matches the transaction account
-    if (account.toString() !== transactionAccount) {
-        console.error("User account does not match the transaction account.");
-        return Response.json({ error: "Unauthorized: Account mismatch" }, {
-            status: 403,
-            headers: ACTIONS_CORS_HEADERS,
-        });
-    }
-
-    console.log("rpc url:", process.env.NEXT_PUBLIC_RPC_URL);
+    console.log("RPC URL:", process.env.NEXT_PUBLIC_RPC_URL);
     const connection = new Connection(process.env.NEXT_PUBLIC_RPC_URL!, "confirmed");
     const multisigPda = new PublicKey(multisigAddress);
 
@@ -128,18 +111,11 @@ export async function POST(request: Request) {
         }
         console.log("Raw multisig account data (hex):", accountInfo.data.toString('hex'));
 
-        // Access the _Multisig object from the first element of the array
-        const [multisigObj, multisigDataLen] = await multisig.accounts.Multisig.fromAccountInfo(accountInfo);
+        const [multisigObj] = await multisig.accounts.Multisig.fromAccountInfo(accountInfo);
         console.log("Multisig info fetched successfully:", multisigObj);
 
         const rentCollector = multisigObj.rentCollector?.toString();
-        if (rentCollector) {
-            console.log("Rent Collector:", rentCollector);
-        } else {
-            console.log("Rent Collector is not defined");
-        }
-
-        console.log("Rent Collector status:", rentCollector ? "Enabled" : "Not enabled");
+        console.log("Rent Collector:", rentCollector || "Not defined");
 
         if (!rentCollector) {
             console.error("Rent collector not enabled for this multisig:", multisigAddress);
@@ -149,45 +125,53 @@ export async function POST(request: Request) {
             });
         }
 
-        // Step 2: Fetch & deserialize the transaction account
-        console.log("Fetching transaction info for account:", transactionAccount);
-        const transactionPubkey = new PublicKey(transactionAccount);
-        const transactionAccountInfo = await connection.getAccountInfo(transactionPubkey);
-        console.log("Transaction account info fetched successfully:", transactionAccountInfo);
-        
-        if (!transactionAccountInfo || !transactionAccountInfo.data || transactionAccountInfo.data.length === 0) {
+        // Step 1: Derive the transaction PDA using the current transaction index and multisig address
+        const txIndex = multisigObj.transactionIndex.toNumber();
+        const [transactionPda] = multisig.getTransactionPda({
+            multisigPda,
+            index: BigInt(txIndex),
+        });
+
+        console.log("Derived transaction PDA:", transactionPda.toString());
+
+        // Step 2: Fetch the transaction account using the derived PDA
+        const transactionAccountInfo = await connection.getAccountInfo(transactionPda);
+        if (!transactionAccountInfo || !transactionAccountInfo.data) {
             console.error("Transaction account data is empty or invalid.");
             return Response.json({ error: "Transaction account data is empty or invalid" }, {
                 status: 400,
                 headers: ACTIONS_CORS_HEADERS,
             });
         }
-        
+
         console.log("Transaction account data length:", transactionAccountInfo.data.length);
         console.log("Transaction account data (hex):", transactionAccountInfo.data.toString('hex'));
 
-        // Log the contents of the buffer for detailed inspection
-        console.log("Transaction account data buffer:", transactionAccountInfo.data);
+        // Verify the expected length before deserialization
+        if (transactionAccountInfo.data.length < 116) {
+            console.error("Transaction account data is shorter than expected, cannot proceed with deserialization.");
+            return Response.json({ error: "Invalid transaction account data length" }, {
+                status: 400,
+                headers: ACTIONS_CORS_HEADERS,
+            });
+        }
 
         try {
             const transactionInfo = await multisig.accounts.VaultTransaction.fromAccountInfo(transactionAccountInfo);
             console.log("Transaction info fetched successfully:", transactionInfo);
 
-            // Step 3: Get its transactionIndex
-            const txIndex = transactionInfo.transactionIndex;
-            console.log("Transaction index:", txIndex);
-
-            // Step 4: Use the index to fetch the Proposal
+            // Step 3: Fetch and validate the Proposal PDA using the derived transaction index
             console.log("Fetching proposal info for transaction index:", txIndex);
             const [proposalPda] = multisig.getProposalPda({
                 multisigPda,
-                transactionIndex: txIndex,
+                transactionIndex: BigInt(txIndex),
             });
+
+            console.log("Derived proposal PDA:", proposalPda.toString());
 
             const proposalInfo = await multisig.accounts.Proposal.fromAccountAddress(connection, proposalPda);
             console.log("Proposal info fetched successfully:", proposalInfo);
 
-            // Step 5: Check the proposal's status
             const status = proposalInfo.status.__kind;
             console.log("Proposal status:", status);
 
@@ -199,13 +183,12 @@ export async function POST(request: Request) {
                 });
             }
 
-            // Step 6: Build the vaultTransactionAccountsClose instruction
             console.log("Building transaction for closing accounts and claiming rent...");
             const transaction = new Transaction();
             transaction.add(
                 await multisig.instructions.vaultTransactionAccountsClose({
                     multisigPda,
-                    transactionIndex: txIndex,
+                    transactionIndex: BigInt(txIndex),
                     member: account,
                     rentCollector: new PublicKey(rentCollector),
                     programId: multisig.PROGRAM_ID,
