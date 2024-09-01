@@ -112,84 +112,81 @@ export async function POST(request: Request) {
             });
         }
 
-        // Derive the transaction PDA using the current transaction index and multisig address
-        const txIndex = multisigObj.transactionIndex;
-        const [transactionPda] = multisig.getTransactionPda({
-            multisigPda,
-            index: txIndex,
-        });
+        // Create a single transaction to bundle all instructions
+        const transaction = new Transaction();
 
-        console.log("Derived transaction PDA:", transactionPda.toString());
+        // Iterate through each transaction from staleTransactionIndex to transactionIndex
+        for (let txIndex = multisigObj.staleTransactionIndex; txIndex <= multisigObj.transactionIndex; txIndex++) {
+            const [transactionPda] = multisig.getTransactionPda({
+                multisigPda,
+                index: txIndex,
+            });
 
-        // Try to deserialize as VaultTransaction first
-        let transactionInfo;
-        let isVaultTransaction = false;
+            console.log("Derived transaction PDA:", transactionPda.toString());
 
-        try {
-            transactionInfo = await multisig.accounts.VaultTransaction.fromAccountAddress(connection, transactionPda);
-            isVaultTransaction = true;
-            console.log("Transaction deserialized as VaultTransaction successfully:", transactionInfo);
-        } catch (error) {
-            console.error("Failed to deserialize as Vault Transaction:", error);
-        }
+            let transactionInfo;
+            let isVaultTransaction = false;
 
-        if (!isVaultTransaction) {
             try {
-                transactionInfo = await multisig.accounts.ConfigTransaction.fromAccountAddress(connection, transactionPda);
-                console.log("Transaction deserialized as ConfigTransaction successfully:", transactionInfo);
+                transactionInfo = await multisig.accounts.VaultTransaction.fromAccountAddress(connection, transactionPda);
+                isVaultTransaction = true;
+                console.log("Transaction deserialized as VaultTransaction successfully:", transactionInfo);
             } catch (error) {
-                console.error("Failed to deserialize as Config Transaction:", error);
-                return Response.json({ error: "Failed to deserialize transaction" }, {
-                    status: 400,
-                    headers: ACTIONS_CORS_HEADERS,
-                });
+                console.error("Failed to deserialize as Vault Transaction:", error);
+            }
+
+            if (!isVaultTransaction) {
+                try {
+                    transactionInfo = await multisig.accounts.ConfigTransaction.fromAccountAddress(connection, transactionPda);
+                    console.log("Transaction deserialized as ConfigTransaction successfully:", transactionInfo);
+                } catch (error) {
+                    console.error("Failed to deserialize as Config Transaction:", error);
+                    continue; // Skip to the next transaction if deserialization fails
+                }
+            }
+
+            const [proposalPda] = multisig.getProposalPda({
+                multisigPda,
+                transactionIndex: txIndex,
+            });
+
+            console.log("Derived proposal PDA:", proposalPda.toString());
+
+            const proposalInfo = await multisig.accounts.Proposal.fromAccountAddress(connection, proposalPda);
+            console.log("Proposal info fetched successfully:", proposalInfo);
+
+            const status = proposalInfo.status.__kind;
+            console.log("Proposal status:", status);
+
+            if (status === "Executed" || status === "Cancelled" || status === "Rejected") {
+                console.log("Adding instructions for closing accounts and claiming rent...");
+                transaction.add(
+                    await multisig.instructions.vaultTransactionAccountsClose({
+                        multisigPda,
+                        transactionIndex: txIndex,
+                        member: account,
+                        rentCollector: new PublicKey(rentCollector),
+                        programId: multisig.PROGRAM_ID,
+                    })
+                );
             }
         }
 
-        // Fetch and validate the Proposal PDA using the derived transaction index
-        console.log("Fetching proposal info for transaction index:", txIndex.toString());
-        const [proposalPda] = multisig.getProposalPda({
-            multisigPda,
-            transactionIndex: txIndex,
-        });
-
-        console.log("Derived proposal PDA:", proposalPda.toString());
-
-        const proposalInfo = await multisig.accounts.Proposal.fromAccountAddress(connection, proposalPda);
-        console.log("Proposal info fetched successfully:", proposalInfo);
-
-        const status = proposalInfo.status.__kind;
-        console.log("Proposal status:", status);
-
-        if (status !== "Executed" && status !== "Cancelled") {
-            console.error("Transaction is not in a state to claim rent. Status:", status);
-            return Response.json({ error: "Transaction is not in a state to claim rent" }, {
+        if (transaction.instructions.length === 0) {
+            console.log("No transactions found to claim rent.");
+            return Response.json({ error: "No eligible transactions found to claim rent" }, {
                 status: 400,
                 headers: ACTIONS_CORS_HEADERS,
             });
         }
 
-        console.log("Building transaction for closing accounts and claiming rent...");
-        const transaction = new Transaction();
-        transaction.add(
-            await multisig.instructions.vaultTransactionAccountsClose({
-                multisigPda,
-                transactionIndex: txIndex,
-                member: account,
-                rentCollector: new PublicKey(rentCollector),
-                programId: multisig.PROGRAM_ID,
-            })
-        );
-
         transaction.feePayer = account;
         transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-
-        console.log("Transaction built successfully:", transaction);
 
         const payload: ActionPostResponse = await createPostResponse({
             fields: {
                 transaction,
-                message: `Rent claim transaction created for transaction index ${txIndex.toString()}`,
+                message: `Rent claim transaction created for multiple transactions`,
             },
         });
 
