@@ -34,7 +34,7 @@ export async function GET(request: Request) {
     const payload: ActionGetResponse = {
         icon: "https://i.imgur.com/DIb21T3.png",
         title: "Claim Rent from Squads Multisig",
-        description: "Claim rent from executed or cancelled transactions in your Squads multisig. Enter Multisig Addresses Comma-separated (max 3).",
+        description: "Claim rent from executed or cancelled transactions in your Squads multisig. Enter Multisig Addresses Comma-separated (max 5).",
         label: "Claim Rent",
         links: {
             actions: [
@@ -44,7 +44,7 @@ export async function GET(request: Request) {
                     parameters: [
                         {
                             name: "multisigAddresses",
-                            label: "Multisig Addresses (comma-separated, max 3)",
+                            label: "Multisig Addresses (comma-separated, max 5)",
                             required: true,
                         },
                     ],
@@ -81,9 +81,9 @@ export async function POST(request: Request) {
 
     const multisigAddresses = multisigAddressesParam.split(',');
 
-    if (multisigAddresses.length > 3) {
-        console.error("More than 3 multisig addresses provided.");
-        return Response.json({ error: "Please provide up to 3 multisig addresses only." }, {
+    if (multisigAddresses.length > 5) {
+        console.error("More than 5 multisig addresses provided.");
+        return Response.json({ error: "Please provide up to 5 multisig addresses only." }, {
             status: 400,
             headers: ACTIONS_CORS_HEADERS,
             statusText: "Too many multisig addresses",
