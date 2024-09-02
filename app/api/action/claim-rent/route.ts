@@ -32,7 +32,7 @@ export async function GET(request: Request) {
     }
 
     const payload: ActionGetResponse = {
-        icon: "https://i.imgur.com/qmLuFpz.png",
+        icon: "https://i.imgur.com/DIb21T3.png",
         title: "Claim Rent from Squads Multisig",
         description: "Claim rent from executed or cancelled transactions in your Squads multisig. Enter Multisig Addresses Comma-separated (max 3).",
         label: "Claim Rent",
