@@ -3,7 +3,8 @@ import { useEffect } from "react";
 
 export default function Home() {
   useEffect(() => {
-    window.location.href = "https://dial.to/developer?url=https%3A%2F%2Fclaimsquadsrent.simplysabir.xyz%2Fapi%2Faction%2Fclaim-rent%3Faction%3Dclaim&cluster=mainnet";
+    window.location.href =
+      "https://dial.to/?action=solana-action%3Ahttps%3A%2F%2Fclaimsquadsrent.simplysabir.xyz%2Fapi%2Faction%2Fclaim-rent%3Faction%3Dclaim&cluster=mainnet";
   }, []);
 
   return (
