@@ -6,12 +6,12 @@ export const GET = async () => {
       
       {
         pathPattern: "/*",
-        apiPath: "/api/actions/*",
+        apiPath: "/api/action/*",
       },
      
       {
-        pathPattern: "/api/actions/**",
-        apiPath: "/api/actions/**",
+        pathPattern: "/api/action/**",
+        apiPath: "/api/action/**",
       },
     ],
   };
