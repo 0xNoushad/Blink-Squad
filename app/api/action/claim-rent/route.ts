@@ -35,7 +35,7 @@ async function fetchMultisigAddresses(connection: Connection, userKey: PublicKey
         1 + // bump
         4; // members vector length
 
-    const maxMemberIndex = 5; // Reduce the number of attempts
+    const maxMemberIndex = 10; // Reduce the number of attempts
     const batchSize = 3; // Number of parallel requests
 
     const fetchBatch = async (startIndex: number, endIndex: number) => {
@@ -94,21 +94,13 @@ export async function GET(request: Request) {
     const payload: ActionGetResponse = {
         icon: "https://i.imgur.com/DIb21T3.png",
         title: "Claim Rent from Squads Multisig",
-        description: "Claim rent from executed or cancelled transactions in your Squads multisig. Enter Multisig Addresses Comma-separated (max 5).",
+        description: "Claim rent from executed or cancelled transactions in your Squads multisig. Click and Connect wallet to claim.",
         label: "Claim Rent",
         links: {
             actions: [
                 {
                     label: "Claim Rent",
-                    // href: `${url.origin}${url.pathname}?action=claim&multisigAddresses={multisigAddresses}`,
-                    href: `${url.origin}${url.pathname}?action=claim`
-                    // parameters: [
-                    //     {
-                    //         name: "multisigAddresses",
-                    //         label: "Multisig Addresses (comma-separated, max 5)",
-                    //         required: true,
-                    //     },
-                    // ],
+                    href: `${url.origin}${url.pathname}?action=claim`,
                 },
             ],
         },
@@ -152,7 +144,7 @@ export async function POST(request: Request) {
         });
     }
 
-    console.log("RPC URL:", process.env.NEXT_PUBLIC_RPC_URL);
+    // console.log("RPC URL:", process.env.NEXT_PUBLIC_RPC_URL);
     const connection = new Connection(process.env.NEXT_PUBLIC_RPC_URL!, "confirmed");
 
     try {
@@ -207,7 +199,7 @@ export async function POST(request: Request) {
                     isVaultTransaction = true;
                     console.log("Transaction deserialized as VaultTransaction successfully:", transactionInfo);
                 } catch (error) {
-                    console.error("Failed to deserialize as Vault Transaction:", error);
+                    console.error("Failed to deserialize as Vault Transaction:");
                     continue; // Skip this transaction if it's not a Vault Transaction
                 }
 
