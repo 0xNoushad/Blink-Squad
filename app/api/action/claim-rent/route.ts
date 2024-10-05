@@ -11,9 +11,69 @@ import {
     PublicKey,
     Transaction,
     LAMPORTS_PER_SOL,
+    AccountInfo,
 } from "@solana/web3.js";
 // @ts-ignore
 import * as multisig from "@sqds/multisig";
+
+const PROGRAM_ID = multisig.PROGRAM_ID;
+
+// Optimized function to fetch multisig addresses
+async function fetchMultisigAddresses(connection: Connection, userKey: PublicKey): Promise<PublicKey[]> {
+    console.log("Fetching multisig addresses for user:", userKey.toString());
+
+    const baseSize =
+        8 + // anchor account discriminator
+        32 + // create_key
+        32 + // config_authority
+        2 + // threshold
+        4 + // time_lock
+        8 + // transaction_index
+        8 + // stale_transaction_index
+        1 + // rent_collector Option discriminator
+        32 + // rent_collector (always 32 bytes, even if None, just to keep the realloc logic simpler)
+        1 + // bump
+        4; // members vector length
+
+    const maxMemberIndex = 10; // Reduce the number of attempts
+    const batchSize = 3; // Number of parallel requests
+
+    const fetchBatch = async (startIndex: number, endIndex: number) => {
+        const filters = Array.from({ length: endIndex - startIndex }, (_, i) => ({
+            memcmp: {
+                offset: baseSize + (startIndex + i) * 33,
+                bytes: userKey.toBase58(),
+            },
+        }));
+
+        try {
+            const results = await Promise.all(
+                filters.map(filter =>
+                    connection.getProgramAccounts(PROGRAM_ID, { filters: [filter] })
+                )
+            );
+            return results.flatMap(result => result.map(account => account.pubkey));
+        } catch (e) {
+            console.error(`Error fetching multisigs for indices ${startIndex}-${endIndex}:`, e);
+            return [];
+        }
+    };
+
+    let multisigAddresses: PublicKey[] = [];
+
+    for (let i = 0; i < maxMemberIndex; i += batchSize) {
+        const endIndex = Math.min(i + batchSize, maxMemberIndex);
+        const batchResults = await fetchBatch(i, endIndex);
+        multisigAddresses.push(...batchResults);
+
+        if (multisigAddresses.length > 0) {
+            break; // Exit early if we found any addresses
+        }
+    }
+
+    console.log("Fetched multisig addresses:", multisigAddresses.map(addr => addr.toString()));
+    return multisigAddresses;
+}
 
 // GET Request - Fetch metadata for the rent collector action
 export async function GET(request: Request) {
@@ -34,20 +94,13 @@ export async function GET(request: Request) {
     const payload: ActionGetResponse = {
         icon: "https://i.imgur.com/DIb21T3.png",
         title: "Claim Rent from Squads Multisig",
-        description: "Claim rent from executed or cancelled transactions in your Squads multisig. Enter Multisig Addresses Comma-separated (max 5).",
+        description: "Claim rent from executed or cancelled transactions in your Squads multisig. Click and Connect wallet to claim.",
         label: "Claim Rent",
         links: {
             actions: [
                 {
                     label: "Claim Rent",
-                    href: `${url.origin}${url.pathname}?action=claim&multisigAddresses={multisigAddresses}`,
-                    parameters: [
-                        {
-                            name: "multisigAddresses",
-                            label: "Multisig Addresses (comma-separated, max 5)",
-                            required: true,
-                        },
-                    ],
+                    href: `${url.origin}${url.pathname}?action=claim`,
                 },
             ],
         },
@@ -65,28 +118,15 @@ export const OPTIONS = GET;
 export async function POST(request: Request) {
     const url = new URL(request.url);
     const action = url.searchParams.get("action");
-    const multisigAddressesParam = url.searchParams.get("multisigAddresses");
 
     console.log("POST request received. Action:", action);
-    console.log("Multisig Addresses:", multisigAddressesParam);
 
-    if (!action || action !== "claim" || !multisigAddressesParam) {
-        console.error("Invalid parameters. Action:", action, "Multisig Addresses:", multisigAddressesParam);
+    if (!action || action !== "claim") {
+        console.error("Invalid action parameter:", action);
         return Response.json({ error: "Invalid parameters" }, {
             status: 400,
             headers: ACTIONS_CORS_HEADERS,
             statusText: "Invalid parameters",
-        });
-    }
-
-    const multisigAddresses = multisigAddressesParam.split(',');
-
-    if (multisigAddresses.length > 5) {
-        console.error("More than 5 multisig addresses provided.");
-        return Response.json({ error: "Please provide up to 5 multisig addresses only." }, {
-            status: 400,
-            headers: ACTIONS_CORS_HEADERS,
-            statusText: "Too many multisig addresses",
         });
     }
 
@@ -104,19 +144,32 @@ export async function POST(request: Request) {
         });
     }
 
-    console.log("RPC URL:", process.env.NEXT_PUBLIC_RPC_URL);
+    // console.log("RPC URL:", process.env.NEXT_PUBLIC_RPC_URL);
     const connection = new Connection(process.env.NEXT_PUBLIC_RPC_URL!, "confirmed");
 
     try {
+        // Fetch multisig addresses
+        // Fetch multisig addresses using the optimized function
+        console.log("Fetching multisig addresses...");
+        const multisigAddresses = await fetchMultisigAddresses(connection, account);
+
+        if (multisigAddresses.length === 0) {
+            console.log("No multisig addresses found for the user.");
+            return Response.json({ error: "No multisig addresses found for the user" }, {
+                status: 400,
+                headers: ACTIONS_CORS_HEADERS,
+                statusText: "No multisig addresses found",
+            });
+        }
+
         // Create a single transaction to bundle all instructions
         const transaction = new Transaction();
         let totalTransactionsProcessed = 0;
         let totalRentCollected = 0;
 
         // Process each multisig in parallel
-        await Promise.all(multisigAddresses.map(async (multisigAddress) => {
-            const multisigPda = new PublicKey(multisigAddress);
-            console.log("Fetching multisig info for address:", multisigAddress);
+        await Promise.all(multisigAddresses.map(async (multisigPda) => {
+            console.log("Fetching multisig info for address:", multisigPda.toString());
 
             const multisigObj = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda);
             console.log("Multisig info fetched successfully:", multisigObj);
@@ -125,7 +178,7 @@ export async function POST(request: Request) {
             console.log("Rent Collector:", rentCollector || "Not defined");
 
             if (!rentCollector) {
-                console.log(`Skipping multisig ${multisigAddress} as rent collector is not enabled.`);
+                console.log(`Skipping multisig ${multisigPda.toString()} as rent collector is not enabled.`);
                 return; // Skip this multisig if rent collector is not enabled
             }
 
@@ -146,7 +199,7 @@ export async function POST(request: Request) {
                     isVaultTransaction = true;
                     console.log("Transaction deserialized as VaultTransaction successfully:", transactionInfo);
                 } catch (error) {
-                    console.error("Failed to deserialize as Vault Transaction:", error);
+                    console.error("Failed to deserialize as Vault Transaction:");
                     continue; // Skip this transaction if it's not a Vault Transaction
                 }
 
